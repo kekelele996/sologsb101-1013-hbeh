@@ -217,7 +217,7 @@ function barPercent(value: number, total: number): string {
 }
 
 function gotoCoral(): void {
-  void router.push(`/belts/${beltId.value}/corals`)
+  void router.push(`/belts/${beltId.value}/samples`)
 }
 
 onMounted(() => {
@@ -267,7 +267,7 @@ onMounted(() => {
         </div>
         <div class="page__actions">
           <el-button :icon="DocumentCopy" @click="openPaste">批量粘贴</el-button>
-          <el-button @click="gotoCoral">← 珊瑚计数</el-button>
+          <el-button @click="gotoCoral">← 采样管</el-button>
           <el-button type="primary" :icon="Plus" @click="openCreate">新增计数记录</el-button>
         </div>
       </div>

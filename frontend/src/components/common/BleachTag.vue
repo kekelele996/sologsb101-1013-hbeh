@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * <BleachTag> 按无/轻/中/重/死亡渲染底色与图标。
- * 被珊瑚计数页（/belts/:id/corals）与覆盖度汇总页（/coverage）消费。
+ * 被外业采样页（/belts/:id/samples）、实验室对账页（/lab）与覆盖度汇总页（/coverage）消费。
  */
 import { computed } from 'vue'
 import { CircleCheckFilled, CircleCloseFilled, InfoFilled, Warning, WarningFilled } from '@element-plus/icons-vue'

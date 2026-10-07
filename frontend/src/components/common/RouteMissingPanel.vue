@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * <RouteMissingPanel> 层级路由友好空态。
- * 直接深链访问 /reefs/:id/sites、/sites/:id/belts、/belts/:id/corals 等路由时，
+ * 直接深链访问 /reefs/:id/sites、/sites/:id/belts、/belts/:id/samples 等路由时，
  * 若 IndexedDB 中查不到该 id，统一渲染本组件（而不是白屏），并提供返回入口与可用 id 快捷跳转。
  */
 import { computed } from 'vue'

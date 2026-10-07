@@ -1,9 +1,11 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 
 /**
- * 路由表：路径与提示词逐字一致。
- * /reefs、/reefs/:id/sites、/sites/:id/belts、/belts/:id/corals、/belts/:id/fishes、/coverage
+ * 路由表：
+ * /reefs、/reefs/:id/sites、/sites/:id/belts、/belts/:id/samples、/belts/:id/fishes、
+ * /lab（实验室鉴定与管号对账）、/coverage
  * 全部页面懒加载，构建时自动分包。
+ * 旧路径 /belts/:id/corals 永久重定向到 /belts/:id/samples（样本层上线后的外业采样入口）。
  */
 const routes: RouteRecordRaw[] = [
   { path: '/', redirect: '/reefs' },
@@ -26,10 +28,10 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '样带布设', icon: 'Files' }
   },
   {
-    path: '/belts/:id/corals',
-    name: 'coral-entry',
-    component: () => import('@/pages/CoralEntry.vue'),
-    meta: { title: '底质与珊瑚分类计数', icon: 'Histogram' }
+    path: '/belts/:id/samples',
+    name: 'sample-entry',
+    component: () => import('@/pages/SampleEntry.vue'),
+    meta: { title: '外业采样管登记', icon: 'Histogram' }
   },
   {
     path: '/belts/:id/fishes',
@@ -38,11 +40,18 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '鱼类与无脊椎动物计数', icon: 'DataLine' }
   },
   {
+    path: '/lab',
+    name: 'lab-board',
+    component: () => import('@/pages/LabBoard.vue'),
+    meta: { title: '实验室鉴定与管号对账', icon: 'MagicStick' }
+  },
+  {
     path: '/coverage',
     name: 'coverage-view',
     component: () => import('@/pages/CoverageView.vue'),
     meta: { title: '白化等级评定与覆盖度汇总', icon: 'PieChart' }
   },
+  { path: '/belts/:id/corals', redirect: (to) => `/belts/${String(to.params.id ?? '')}/samples` },
   { path: '/:pathMatch(.*)*', redirect: '/reefs' }
 ]
 

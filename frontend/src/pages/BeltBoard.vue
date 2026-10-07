@@ -41,17 +41,22 @@ const form = reactive({
   observer: ''
 })
 
-/** 样带行：回显珊瑚记录数、鱼类记录数、覆盖率与白化指数 */
+/** 样带行：回显采样管数、鱼类记录数、覆盖率（实验室口径）与白化指数 */
 const rows = computed(() =>
   beltStore.beltsOfSite(siteId.value).map((belt) => {
-    const corals = surveyStore.coralsOfBelt(belt.id)
+    const corals = surveyStore.effectiveCoralsOfBelt(belt.id)
+    const sampleCount = surveyStore.samplesOfBelt(belt.id).length
+    const provisionalCount = new Set(
+      corals.filter((coral) => coral.genusSource === '暂定').map((coral) => coral.tubeNo)
+    ).size
     const fishes = surveyStore.fishesOfBelt(belt.id)
     const coverCmTotal = corals.reduce((sum, coral) => sum + coral.coverCm, 0)
     const index = bleachIndex(corals)
     const fishTotal = fishes.filter((fish) => fish.category === '鱼类').reduce((sum, fish) => sum + fish.count, 0)
     return {
       belt,
-      coralCount: corals.length,
+      coralCount: sampleCount,
+      provisionalCount,
       fishCount: fishes.length,
       coverCmTotal,
       coveragePct: coralCoveragePct(coverCmTotal, belt.lengthM),
@@ -67,7 +72,7 @@ const conflicts = computed(() => beltStore.findBeltConflicts(siteId.value))
 const stats = computed(() => {
   const belts = beltStore.beltsOfSite(siteId.value)
   const totalLength = belts.reduce((sum, belt) => sum + belt.lengthM, 0)
-  const coralCount = belts.reduce((sum, belt) => sum + surveyStore.coralsOfBelt(belt.id).length, 0)
+  const coralCount = belts.reduce((sum, belt) => sum + surveyStore.samplesOfBelt(belt.id).length, 0)
   const fishCount = belts.reduce((sum, belt) => sum + surveyStore.fishesOfBelt(belt.id).length, 0)
   return {
     beltCount: belts.length,
@@ -143,7 +148,7 @@ async function submitForm(): Promise<void> {
     } else {
       const created = await beltStore.createBelt(siteId.value, payload)
       beltStore.selectBelt(created.id)
-      ElMessage.success(`样带 ${created.no}（${created.orientation}向 ${created.lengthM} m）已布设，可录入底质与珊瑚计数`)
+      ElMessage.success(`样带 ${created.no}（${created.orientation}向 ${created.lengthM} m）已布设，可登记采样管与鱼类计数`)
     }
     dialogVisible.value = false
   } finally {
@@ -155,7 +160,7 @@ async function removeBelt(belt: Belt): Promise<void> {
   const counts = surveyStore.beltRecordCounts[belt.id] ?? { coralCount: 0, fishCount: 0 }
   try {
     await ElMessageBox.confirm(
-      `删除样带「${belt.no}」将同时删除其 ${counts.coralCount} 条珊瑚记录与 ${counts.fishCount} 条计数记录，确认删除？`,
+      `删除样带「${belt.no}」将同时删除其 ${counts.coralCount} 根采样管（含鉴定记录）与 ${counts.fishCount} 条计数记录，确认删除？`,
       '删除确认',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
     )
@@ -182,7 +187,7 @@ async function applyOrientationOrder(): Promise<void> {
 
 function gotoCorals(belt: Belt): void {
   beltStore.selectBelt(belt.id)
-  void router.push(`/belts/${belt.id}/corals`)
+  void router.push(`/belts/${belt.id}/samples`)
 }
 
 function gotoFishes(belt: Belt): void {
@@ -243,7 +248,7 @@ onMounted(() => {
       <div class="gb-stats-row">
         <StatBadge label="样带条数" :value="stats.beltCount" suffix="条" icon="Files" />
         <StatBadge label="累计长度" :value="stats.totalLength" suffix="m" tone="info" icon="Odometer" />
-        <StatBadge label="珊瑚记录" :value="stats.coralCount" suffix="条" tone="success" icon="Histogram" />
+        <StatBadge label="采样管" :value="stats.coralCount" suffix="管" tone="success" icon="Histogram" />
         <StatBadge label="计数记录" :value="stats.fishCount" suffix="条" tone="warning" icon="DataLine" />
       </div>
 
@@ -258,7 +263,7 @@ onMounted(() => {
       <EmptyPanel
         v-if="rows.length === 0"
         title="该站位还没有样带"
-        description="新增第一条样带并录入长度与朝向，随后即可录入底质、珊瑚分类覆盖与鱼类计数。"
+        description="新增第一条样带并录入长度与朝向，随后即可登记采样管、实验室鉴定与鱼类计数。"
         action-text="新增样带"
         @action="openCreate"
       />
@@ -281,10 +286,13 @@ onMounted(() => {
           </template>
         </el-table-column>
         <el-table-column prop="belt.observer" label="调查人" width="110" />
-        <el-table-column label="珊瑚记录" width="120" align="center">
+        <el-table-column label="采样管" width="130" align="center">
           <template #default="{ row }">
             <el-button text type="primary" size="small" @click="gotoCorals(row.belt)">
-              {{ row.coralCount }} 条
+              {{ row.coralCount }} 管
+              <el-tag v-if="row.provisionalCount > 0" size="small" type="warning" effect="plain" style="margin-left: 4px">
+                暂定 {{ row.provisionalCount }}
+              </el-tag>
             </el-button>
           </template>
         </el-table-column>
@@ -309,7 +317,7 @@ onMounted(() => {
         </el-table-column>
         <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" type="primary" :icon="Right" @click="gotoCorals(row.belt)">珊瑚</el-button>
+            <el-button size="small" type="primary" :icon="Right" @click="gotoCorals(row.belt)">采样管</el-button>
             <el-button size="small" @click="gotoFishes(row.belt)">鱼类</el-button>
             <el-button size="small" :icon="Edit" @click="openEdit(row.belt)">编辑</el-button>
             <el-button size="small" type="danger" plain :icon="Delete" @click="removeBelt(row.belt)">删除</el-button>
@@ -357,7 +365,7 @@ onMounted(() => {
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="submitting" @click="submitForm">
-          {{ editingId ? '保存修改' : '布设并录入记录' }}
+          {{ editingId ? '保存修改' : '布设并去登记采样' }}
         </el-button>
       </template>
     </el-dialog>

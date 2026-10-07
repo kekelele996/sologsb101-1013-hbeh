@@ -8,7 +8,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { UploadFile } from 'element-plus'
-import { Download, Refresh, Upload } from '@element-plus/icons-vue'
+import { Download, Refresh, Tickets, Upload } from '@element-plus/icons-vue'
 import FilterBar from '@/components/common/FilterBar.vue'
 import type { FilterModel } from '@/types/filter'
 import { buildQuery, queryToArray, queryToBool } from '@/types/filter'
@@ -31,14 +31,17 @@ import {
 } from '@/utils/db'
 import {
   buildBackupPayload,
+  buildCoverageLines,
   buildReefSummaries,
   countPayload,
   exportBackupJson,
+  exportCoverageCsv,
   importBackup,
   readFileText,
   remapIds,
   validateBackup,
-  type CountMap
+  type CountMap,
+  type CoverageLine
 } from '@/utils/export'
 
 const route = useRoute()
@@ -46,7 +49,14 @@ const router = useRouter()
 const reefStore = useReefStore()
 const surveyStore = useSurveyStore()
 
-const EMPTY_COUNTS: CountMap = { reefs: 0, sites: 0, belts: 0, corals: 0, fishes: 0 }
+const EMPTY_COUNTS: CountMap = {
+  reefs: 0,
+  sites: 0,
+  belts: 0,
+  samples: 0,
+  identifications: 0,
+  fishes: 0
+}
 
 const counts = ref<CountMap>(EMPTY_COUNTS)
 const lastBackupAt = ref<string | null>(null)
@@ -65,10 +75,36 @@ const filterModel = computed<FilterModel>(() => ({
 
 const rows = computed(() => surveyStore.filteredCoverageRows)
 
+/** 全库对账计数（待鉴定 / 对不上的管号） */
+const reconcileCounts = computed(() => surveyStore.reconciliation.counts)
+const orphanIdentifications = computed(() => surveyStore.reconciliation.orphanIdentifications)
+
+/** 按实验室有效属名归并的全库覆盖长度（含暂定拆分） */
+const genusRollup = computed(() => {
+  const map = new Map<string, { coverCm: number; provisionalCoverCm: number; tubes: number }>()
+  surveyStore.effectiveCorals.forEach((coral) => {
+    const bucket = map.get(coral.genus) ?? { coverCm: 0, provisionalCoverCm: 0, tubes: 0 }
+    bucket.coverCm += coral.coverCm
+    bucket.tubes += 1
+    if (coral.genusSource === '暂定') bucket.provisionalCoverCm += coral.coverCm
+    map.set(coral.genus, bucket)
+  })
+  return Array.from(map.entries())
+    .map(([genus, value]) => ({
+      genus,
+      coverCm: Number(value.coverCm.toFixed(1)),
+      provisionalCoverCm: Number(value.provisionalCoverCm.toFixed(1)),
+      tubes: value.tubes
+    }))
+    .sort((a, b) => b.coverCm - a.coverCm)
+})
+
 const totals = computed(() => ({
   belts: rows.value.length,
-  coralCount: rows.value.reduce((sum, row) => sum + row.coralCount, 0),
+  sampleCount: rows.value.reduce((sum, row) => sum + row.sampleCount, 0),
+  provisionalCount: rows.value.reduce((sum, row) => sum + row.provisionalCount, 0),
   coverCmTotal: rows.value.reduce((sum, row) => sum + row.coverCmTotal, 0),
+  provisionalCoverCm: rows.value.reduce((sum, row) => sum + row.provisionalCoverCm, 0),
   fishTotal: rows.value.reduce((sum, row) => sum + row.fishTotal, 0),
   avgCoveragePct:
     rows.value.length === 0
@@ -104,29 +140,8 @@ async function refresh(): Promise<void> {
   lastBackupAt.value = readLastBackupAt()
   stampedVersion.value = readStampedDbVersion()
   const payload = await buildBackupPayload()
-  reefSummaries.value = buildReefSummaries(payload, surveyStore.coverageRows.map((row) => ({
-    beltId: row.beltId,
-    beltNo: row.beltNo,
-    reefId: row.reefId,
-    reefName: row.reefName,
-    siteId: row.siteId,
-    siteNo: row.siteNo,
-    lengthM: row.lengthM,
-    orientation: row.orientation,
-    surveyDate: row.surveyDate,
-    observer: row.observer,
-    coralCount: row.coralCount,
-    coverCmTotal: row.coverCmTotal,
-    coveragePct: row.coveragePct,
-    bleachIndex: row.bleachIndex,
-    grade: row.grade,
-    bleachedSharePct: row.bleachedSharePct,
-    distribution: row.distribution,
-    fishTotal: row.fishTotal,
-    invertebrateTotal: row.invertebrateTotal,
-    fishDensity: row.fishDensity,
-    conclusion: ''
-  })))
+  const lines: CoverageLine[] = buildCoverageLines(payload)
+  reefSummaries.value = buildReefSummaries(payload, lines)
 }
 
 function handleFilterChange(): void {
@@ -145,12 +160,28 @@ function handleReset(): void {
   void router.replace({ query: {} })
 }
 
+function gotoLab(): void {
+  void router.push('/lab')
+}
+
 async function handleExport(): Promise<void> {
   busy.value = true
   try {
     const result = await exportBackupJson()
     await refresh()
     notice.value = `已导出 ${result.fileName}（共 ${Object.values(result.counts).reduce((sum, value) => sum + value, 0)} 条记录）。`
+    ElMessage.success(notice.value)
+  } finally {
+    busy.value = false
+  }
+}
+
+async function handleExportCsv(): Promise<void> {
+  busy.value = true
+  try {
+    const payload = await buildBackupPayload()
+    const files = exportCoverageCsv(payload, buildCoverageLines(payload))
+    notice.value = `已导出 ${files.coverageFile} 与 ${files.tubeFile}（覆盖度结论与管号对账同一口径）。`
     ElMessage.success(notice.value)
   } finally {
     busy.value = false
@@ -180,8 +211,11 @@ async function handleImport(): Promise<void> {
     }
     const payload: BackupPayload = overwriteOnImport.value ? validation.payload : remapIds(validation.payload)
     const summary = countPayload(payload)
+    const legacyHint = validation.legacy
+      ? `检测到旧版（无管号）备份，已按样带与属名补出 ${payload.samples.length} 根 LEGACY 待鉴定采样管；`
+      : ''
     await ElMessageBox.confirm(
-      `将导入 ${Object.entries(summary)
+      `${legacyHint}将导入 ${Object.entries(summary)
         .map(([key, value]) => `${key} ${value} 条`)
         .join('、')}；${overwriteOnImport.value ? '覆盖模式会先清空现有本地数据' : '追加模式会重新分配 id 保留现有数据'}。确认继续？`,
       '导入确认',
@@ -189,7 +223,9 @@ async function handleImport(): Promise<void> {
     )
     await importBackup(payload, overwriteOnImport.value)
     await refresh()
-    notice.value = '导入完成，覆盖度汇总已刷新。'
+    notice.value = validation.legacy
+      ? '旧版备份已升级：采样管按管号补齐为待鉴定状态，覆盖度汇总已刷新。'
+      : '导入完成，覆盖度汇总已刷新。'
     ElMessage.success(notice.value)
   } finally {
     busy.value = false
@@ -200,7 +236,7 @@ async function handleImport(): Promise<void> {
 async function handleDatabaseReset(): Promise<void> {
   try {
     await ElMessageBox.confirm(
-      '将清空全部本地数据并重新播种演示数据（礁区、站位、样带、珊瑚记录、鱼类计数）。确认继续？',
+      '将清空全部本地数据并重新播种演示数据（礁区、站位、样带、采样管、鉴定记录、鱼类计数）。确认继续？',
       '重置本地数据',
       { type: 'warning', confirmButtonText: '清空并重建', cancelButtonText: '取消' }
     )
@@ -217,12 +253,12 @@ async function copySummary(): Promise<void> {
   const text = rows.value
     .map(
       (row) =>
-        `${row.reefName}｜站位 ${row.siteNo}｜样带 ${row.beltNo}（${row.orientation}向 ${row.lengthM} m）：珊瑚覆盖率 ${row.coveragePct}%，白化指数 ${row.bleachIndex}（${row.grade}），白化占比 ${row.bleachedSharePct}%，鱼类 ${row.fishTotal} 尾（${row.fishDensity} 尾/100m²）`
+        `${row.reefName}｜站位 ${row.siteNo}｜样带 ${row.beltNo}（${row.orientation}向 ${row.lengthM} m）：珊瑚覆盖率 ${row.coveragePct}%，白化指数 ${row.bleachIndex}（${row.grade}），白化占比 ${row.bleachedSharePct}%，已鉴定 ${row.confirmedCount} 管 / 暂定 ${row.provisionalCount} 管，鱼类 ${row.fishTotal} 尾（${row.fishDensity} 尾/100m²）`
     )
     .join('\n')
   try {
     await navigator.clipboard.writeText(text)
-    notice.value = '覆盖度结论已复制到剪贴板。'
+    notice.value = '覆盖度结论已复制到剪贴板（与导出 CSV 同一口径）。'
     ElMessage.success(notice.value)
   } catch {
     notice.value = '当前浏览器不允许读取剪贴板，请手动选中表格内容复制。'
@@ -235,7 +271,8 @@ onMounted(() => {
     keyword: typeof route.query.kw === 'string' ? route.query.kw : '',
     reefIds: queryToArray(route.query.reef),
     bleachLevels: queryToArray(route.query.level) as BleachLevel[],
-    onlyBleached: queryToBool(route.query.bleached)
+    onlyBleached: queryToBool(route.query.bleached),
+    onlyProvisional: false
   })
   void refresh()
 })
@@ -254,17 +291,40 @@ onMounted(() => {
       </div>
       <div class="page__actions">
         <el-button :icon="Refresh" @click="refresh">刷新</el-button>
+        <el-button @click="gotoLab">实验室对账</el-button>
         <el-button @click="copySummary">复制结论</el-button>
+        <el-button :icon="Tickets" :loading="busy" @click="handleExportCsv">导出 CSV</el-button>
         <el-button type="primary" :icon="Download" :loading="busy" @click="handleExport">导出 JSON</el-button>
       </div>
     </div>
 
     <el-alert v-if="notice" type="success" :closable="false" show-icon :title="notice" />
 
+    <el-alert
+      v-if="reconcileCounts.pendingCount > 0 || reconcileCounts.orphanTubeCount > 0"
+      :type="reconcileCounts.orphanTubeCount > 0 ? 'error' : 'warning'"
+      show-icon
+      :closable="false"
+      class="page__reconcile-alert"
+    >
+      <template #title>
+        管号对账：{{ reconcileCounts.pendingCount }} 根管待实验室补鉴定（现按外业暂定属名计入）；
+        {{ reconcileCounts.orphanTubeCount }} 个鉴定管号在外业查无对应采样管（不计入覆盖率）。
+        <el-button size="small" type="primary" text @click="gotoLab">去对账 →</el-button>
+      </template>
+    </el-alert>
+
     <div class="gb-stats-row">
       <StatBadge label="样带数" :value="totals.belts" suffix="条" icon="Files" />
-      <StatBadge label="珊瑚记录" :value="totals.coralCount" suffix="条" tone="info" icon="Histogram" />
+      <StatBadge
+        label="采样管（鉴定 / 暂定）"
+        :value="`${totals.sampleCount - totals.provisionalCount} / ${totals.provisionalCount}`"
+        suffix="管"
+        tone="info"
+        icon="Histogram"
+      />
       <StatBadge label="覆盖长度合计" :value="totals.coverCmTotal" suffix="cm" tone="success" icon="Odometer" />
+      <StatBadge label="其中暂定覆盖" :value="totals.provisionalCoverCm" suffix="cm" tone="warning" icon="Clock" />
       <StatBadge label="平均覆盖率" :value="totals.avgCoveragePct" suffix="%" :percent="Math.min(100, totals.avgCoveragePct)" icon="PieChart" />
       <StatBadge
         label="平均白化指数"
@@ -298,12 +358,51 @@ onMounted(() => {
       @reset="handleReset"
     />
 
+    <div class="page__switch-row">
+      <el-checkbox
+        :model-value="surveyStore.filter.onlyProvisional"
+        @change="(v: boolean) => surveyStore.patchFilter({ onlyProvisional: v })"
+      >
+        只看含暂定属名（未拿到实验室成功鉴定）的样带
+      </el-checkbox>
+    </div>
+
+    <el-card shadow="never" class="gb-panel">
+      <div class="gb-panel-title">
+        <h3>按实验室鉴定属名归并的覆盖长度（cm）</h3>
+        <span class="gb-hint">未出鉴定的管子按外业暂定属名计入，其覆盖长度并入「暂定覆盖」并标注</span>
+      </div>
+      <el-table :data="genusRollup" border stripe size="small" class="gb-table-compact">
+        <el-table-column prop="genus" label="有效属名" min-width="160" />
+        <el-table-column label="覆盖长度" width="140" align="right">
+          <template #default="{ row }">
+            <span class="gb-mono">{{ row.coverCm }} cm</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="其中暂定覆盖" width="150" align="right">
+          <template #default="{ row }">
+            <el-tag v-if="row.provisionalCoverCm > 0" size="small" type="warning" effect="plain">
+              {{ row.provisionalCoverCm }} cm
+            </el-tag>
+            <span v-else class="gb-hint">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="采样管数" width="100" align="right">
+          <template #default="{ row }"><span class="gb-mono">{{ row.tubes }}</span></template>
+        </el-table-column>
+        <template #empty>
+          <EmptyPanel title="暂无采样管" description="先登记采样管并等待实验室鉴定。" compact />
+        </template>
+      </el-table>
+    </el-card>
+
     <el-card shadow="never" class="gb-panel">
       <div class="gb-panel-title">
         <h3>白化等级分布（覆盖长度 cm）</h3>
         <span class="gb-hint">
           总体白化指数 {{ surveyStore.globalStats.bleachIndex }}（{{ surveyStore.globalStats.grade }}）· 白化占比
-          {{ surveyStore.globalStats.bleachedSharePct }}% · 存在白化样带 {{ totals.bleachedBelts }} 条
+          {{ surveyStore.globalStats.bleachedSharePct }}% · 存在白化样带 {{ totals.bleachedBelts }} 条 · 暂定覆盖
+          {{ surveyStore.globalStats.provisionalCoverCm }} cm
         </span>
       </div>
       <div class="gb-bars">
@@ -323,13 +422,13 @@ onMounted(() => {
     <el-card shadow="never" class="gb-panel">
       <div class="gb-panel-title">
         <h3>按样带的覆盖度成果（{{ rows.length }} 条）</h3>
-        <span class="gb-hint">按白化指数降序排列</span>
+        <span class="gb-hint">按白化指数降序；属名为实验室鉴定归并口径，暂定管数单列</span>
       </div>
 
       <EmptyPanel
         v-if="rows.length === 0"
         title="没有符合条件的样带"
-        description="请先到礁区台账布设站位与样带，并录入珊瑚分类覆盖与鱼类计数；也可调整当前筛选条件。"
+        description="请先到礁区台账布设站位与样带、登记采样管并由实验室录入鉴定；也可调整当前筛选条件。"
         compact
       />
 
@@ -340,20 +439,32 @@ onMounted(() => {
             <div class="gb-hint">站位 {{ row.siteNo }} · 样带 {{ row.beltNo }}（{{ row.orientation }}向）</div>
           </template>
         </el-table-column>
-        <el-table-column label="样带长度" width="110" align="right">
+        <el-table-column label="样带长度" width="100" align="right">
           <template #default="{ row }">
             <span class="gb-mono">{{ row.lengthM }} m</span>
           </template>
         </el-table-column>
-        <el-table-column label="珊瑚记录" width="100" align="right">
+        <el-table-column label="采样管" width="130" align="right">
           <template #default="{ row }">
-            <span class="gb-mono">{{ row.coralCount }}</span>
+            <span class="gb-mono">{{ row.sampleCount }} 管</span>
+            <div class="gb-hint gb-mono">
+              鉴定 {{ row.confirmedCount }} · 暂定
+              <el-tag size="small" :type="row.provisionalCount > 0 ? 'warning' : 'info'" effect="plain">{{ row.provisionalCount }}</el-tag>
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="覆盖率" width="130" align="right">
           <template #default="{ row }">
             <span class="gb-mono">{{ row.coveragePct }}%</span>
             <div class="gb-hint gb-mono">{{ row.coverCmTotal }} cm</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="暂定覆盖" width="110" align="right">
+          <template #default="{ row }">
+            <el-tag v-if="row.provisionalCoverCm > 0" size="small" type="warning" effect="plain">
+              {{ row.provisionalCoverCm }} cm
+            </el-tag>
+            <span v-else class="gb-hint">—</span>
           </template>
         </el-table-column>
         <el-table-column label="白化评定" width="170">
@@ -412,9 +523,9 @@ onMounted(() => {
             <span class="gb-mono">{{ row.siteCount }} / {{ row.beltCount }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="珊瑚记录" width="110" align="right">
+        <el-table-column label="采样管（鉴定/暂定）" width="160" align="right">
           <template #default="{ row }">
-            <span class="gb-mono">{{ row.coralCount }}</span>
+            <span class="gb-mono">{{ row.confirmedCount }} / {{ row.provisionalCount }}</span>
           </template>
         </el-table-column>
         <el-table-column label="覆盖长度" width="130" align="right">
@@ -440,7 +551,7 @@ onMounted(() => {
       <div class="gb-panel-title">
         <h3>结构版本与全量 JSON 导入导出</h3>
         <span class="gb-hint">
-          导出内容包含 reefs / sites / belts / corals / fishes 五张表 · 最近备份
+          导出内容包含 reefs / sites / belts / samples / identifications / fishes 六张表 · 最近备份
           {{ lastBackupAt ? new Date(lastBackupAt).toLocaleString('zh-CN') : '尚未备份' }}
         </span>
       </div>
@@ -477,8 +588,8 @@ onMounted(() => {
         <el-descriptions-item label="本地库名">{{ DB_NAME }}</el-descriptions-item>
         <el-descriptions-item label="结构版本">v{{ DB_VERSION }}（浏览器记录 v{{ stampedVersion }}）</el-descriptions-item>
         <el-descriptions-item label="礁区 / 站位">{{ counts.reefs }} / {{ counts.sites }}</el-descriptions-item>
-        <el-descriptions-item label="样带 / 珊瑚记录">{{ counts.belts }} / {{ counts.corals }}</el-descriptions-item>
-        <el-descriptions-item label="鱼类计数">{{ counts.fishes }}</el-descriptions-item>
+        <el-descriptions-item label="样带 / 采样管">{{ counts.belts }} / {{ counts.samples }}</el-descriptions-item>
+        <el-descriptions-item label="鉴定记录 / 鱼类计数">{{ counts.identifications }} / {{ counts.fishes }}</el-descriptions-item>
         <el-descriptions-item label="最近备份时间">
           {{ lastBackupAt ? new Date(lastBackupAt).toLocaleString('zh-CN') : '尚未备份' }}
         </el-descriptions-item>
@@ -529,5 +640,15 @@ onMounted(() => {
 .page__mini-bar {
   display: block;
   height: 100%;
+}
+
+.page__reconcile-alert {
+  margin: -2px 0;
+}
+
+.page__switch-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 </style>

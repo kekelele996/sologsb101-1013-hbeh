@@ -47,7 +47,7 @@ const cards = computed(() =>
     const siteIds = new Set(sites.map((site) => site.id))
     const belts = beltStore.belts.filter((belt) => siteIds.has(belt.siteId))
     const beltIds = new Set(belts.map((belt) => belt.id))
-    const corals = surveyStore.corals.filter((coral) => beltIds.has(coral.beltId))
+    const corals = surveyStore.effectiveCorals.filter((coral) => beltIds.has(coral.beltId))
     const fishes = surveyStore.fishes.filter((fish) => beltIds.has(fish.beltId))
     const index = bleachIndex(corals)
     return {
@@ -247,7 +247,7 @@ watch(
       <StatBadge label="筛选后礁区" :value="totals.reefs" suffix="个" icon="Odometer" />
       <StatBadge label="站位总数" :value="totals.sites" suffix="个" tone="info" icon="Grid" />
       <StatBadge label="样带总数" :value="totals.belts" suffix="条" tone="success" icon="Files" />
-      <StatBadge label="珊瑚记录" :value="totals.corals" suffix="条" icon="Histogram" />
+      <StatBadge label="采样管" :value="totals.corals" suffix="管" icon="Histogram" />
       <StatBadge
         label="平均白化指数"
         :value="totals.avgBleachIndex"
@@ -286,7 +286,7 @@ watch(
         <div class="reef-card__stats">
           <StatBadge label="站位" :value="card.siteCount" suffix="个" size="small" tone="info" icon="Grid" />
           <StatBadge label="样带" :value="card.beltCount" suffix="条" size="small" icon="Files" />
-          <StatBadge label="珊瑚记录" :value="card.coralCount" suffix="条" size="small" tone="success" icon="Histogram" />
+          <StatBadge label="采样管" :value="card.coralCount" suffix="管" size="small" tone="success" icon="Histogram" />
           <StatBadge
             label="白化指数"
             :value="card.bleachIndex"

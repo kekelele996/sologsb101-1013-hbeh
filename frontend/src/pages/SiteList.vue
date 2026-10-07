@@ -43,7 +43,7 @@ const form = reactive({
   substrate: SUBSTRATES[0]
 })
 
-/** 站位行：汇总样带数、珊瑚记录数与平均白化指数 */
+/** 站位行：汇总样带数、采样管数与平均白化指数（有效属名口径） */
 const rows = computed(() => {
   const sites = reefStore.sitesOfReef(reefId.value).filter((site) => {
     const keyword = reefStore.siteFilter.keyword.trim()
@@ -55,7 +55,7 @@ const rows = computed(() => {
   return sites.map((site) => {
     const belts = beltStore.beltsOfSite(site.id)
     const beltIds = new Set(belts.map((belt) => belt.id))
-    const corals = surveyStore.corals.filter((coral) => beltIds.has(coral.beltId))
+    const corals = surveyStore.effectiveCorals.filter((coral) => beltIds.has(coral.beltId))
     const index = bleachIndex(corals)
     return {
       site,
@@ -157,7 +157,7 @@ async function removeSite(site: Site): Promise<void> {
   const beltCount = beltStore.beltsOfSite(site.id).length
   try {
     await ElMessageBox.confirm(
-      `删除站位「${site.no}」将同时删除其 ${beltCount} 条样带及全部珊瑚与鱼类记录，确认删除？`,
+      `删除站位「${site.no}」将同时删除其 ${beltCount} 条样带及全部采样管、鉴定与鱼类记录，确认删除？`,
       '删除确认',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
     )
@@ -298,7 +298,7 @@ onMounted(() => {
             </el-button>
           </template>
         </el-table-column>
-        <el-table-column label="珊瑚记录" width="110" align="right">
+        <el-table-column label="采样管" width="110" align="right">
           <template #default="{ row }">
             <span class="gb-mono">{{ row.coralCount }}</span>
           </template>
