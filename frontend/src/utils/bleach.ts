@@ -112,19 +112,6 @@ export function fishDensity(count: number, beltLengthM: number, beltWidthM = 1):
   return round((count / area) * 100, 2)
 }
 
-/** 按属名分组汇总覆盖长度 */
-export function groupByGenus(
-  records: Array<{ genus: string; coverCm: number }>
-): Array<{ genus: string; coverCm: number }> {
-  const map = new Map<string, number>()
-  records.forEach((record) => {
-    map.set(record.genus, (map.get(record.genus) ?? 0) + record.coverCm)
-  })
-  return Array.from(map.entries())
-    .map(([genus, coverCm]) => ({ genus, coverCm: round(coverCm, 1) }))
-    .sort((a, b) => b.coverCm - a.coverCm)
-}
-
 /** 按形态分组汇总覆盖长度 */
 export function groupByForm(
   records: Array<{ form: CoralForm; coverCm: number }>

@@ -17,6 +17,7 @@ import EmptyPanel from '@/components/common/EmptyPanel.vue'
 import { useReefStore } from '@/stores/reefStore'
 import { useBeltStore } from '@/stores/beltStore'
 import { useSurveyStore } from '@/stores/surveyStore'
+import { useLabStore } from '@/stores/labStore'
 import { AREA_BUCKETS, createEmptyReefFilter, PROTECT_STATUSES } from '@/types/reef'
 import type { ProtectStatus, Reef } from '@/types/reef'
 import { bleachGrade, bleachIndex } from '@/utils/bleach'
@@ -27,6 +28,7 @@ const router = useRouter()
 const reefStore = useReefStore()
 const beltStore = useBeltStore()
 const surveyStore = useSurveyStore()
+const labStore = useLabStore()
 
 const dialogVisible = ref(false)
 const editingId = ref<string | null>(null)
@@ -47,14 +49,15 @@ const cards = computed(() =>
     const siteIds = new Set(sites.map((site) => site.id))
     const belts = beltStore.belts.filter((belt) => siteIds.has(belt.siteId))
     const beltIds = new Set(belts.map((belt) => belt.id))
-    const corals = surveyStore.corals.filter((coral) => beltIds.has(coral.beltId))
+    const samples = labStore.resolvedSamples.filter((sample) => beltIds.has(sample.beltId))
     const fishes = surveyStore.fishes.filter((fish) => beltIds.has(fish.beltId))
-    const index = bleachIndex(corals)
+    const index = bleachIndex(samples)
     return {
       reef,
       siteCount: sites.length,
       beltCount: belts.length,
-      coralCount: corals.length,
+      sampleCount: samples.length,
+      provisionalCount: samples.filter((sample) => sample.provisional).length,
       fishTotal: fishes.reduce((sum, fish) => sum + fish.count, 0),
       bleachIndex: index,
       grade: bleachGrade(index)
@@ -73,7 +76,7 @@ const totals = computed(() => ({
   reefs: cards.value.length,
   sites: cards.value.reduce((sum, card) => sum + card.siteCount, 0),
   belts: cards.value.reduce((sum, card) => sum + card.beltCount, 0),
-  corals: cards.value.reduce((sum, card) => sum + card.coralCount, 0),
+  samples: cards.value.reduce((sum, card) => sum + card.sampleCount, 0),
   avgBleachIndex:
     cards.value.length === 0
       ? 0
@@ -247,7 +250,7 @@ watch(
       <StatBadge label="筛选后礁区" :value="totals.reefs" suffix="个" icon="Odometer" />
       <StatBadge label="站位总数" :value="totals.sites" suffix="个" tone="info" icon="Grid" />
       <StatBadge label="样带总数" :value="totals.belts" suffix="条" tone="success" icon="Files" />
-      <StatBadge label="珊瑚记录" :value="totals.corals" suffix="条" icon="Histogram" />
+      <StatBadge label="样本管" :value="totals.samples" suffix="管" icon="Histogram" />
       <StatBadge
         label="平均白化指数"
         :value="totals.avgBleachIndex"
@@ -286,7 +289,16 @@ watch(
         <div class="reef-card__stats">
           <StatBadge label="站位" :value="card.siteCount" suffix="个" size="small" tone="info" icon="Grid" />
           <StatBadge label="样带" :value="card.beltCount" suffix="条" size="small" icon="Files" />
-          <StatBadge label="珊瑚记录" :value="card.coralCount" suffix="条" size="small" tone="success" icon="Histogram" />
+          <StatBadge label="样本管" :value="card.sampleCount" suffix="管" size="small" tone="success" icon="Histogram" />
+          <StatBadge
+            v-if="card.provisionalCount > 0"
+            label="暂定计入"
+            :value="card.provisionalCount"
+            suffix="管"
+            size="small"
+            tone="warning"
+            icon="Clock"
+          />
           <StatBadge
             label="白化指数"
             :value="card.bleachIndex"

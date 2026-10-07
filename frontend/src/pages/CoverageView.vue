@@ -17,6 +17,7 @@ import StatBadge from '@/components/common/StatBadge.vue'
 import EmptyPanel from '@/components/common/EmptyPanel.vue'
 import { useReefStore } from '@/stores/reefStore'
 import { useSurveyStore } from '@/stores/surveyStore'
+import { useLabStore } from '@/stores/labStore'
 import { BLEACH_LEVELS } from '@/types/coralRecord'
 import type { BleachLevel } from '@/types/coralRecord'
 import { BLEACH_COLOR } from '@/utils/bleach'
@@ -31,6 +32,7 @@ import {
 } from '@/utils/db'
 import {
   buildBackupPayload,
+  buildGenusSummary,
   buildReefSummaries,
   countPayload,
   exportBackupJson,
@@ -45,13 +47,22 @@ const route = useRoute()
 const router = useRouter()
 const reefStore = useReefStore()
 const surveyStore = useSurveyStore()
+const labStore = useLabStore()
 
-const EMPTY_COUNTS: CountMap = { reefs: 0, sites: 0, belts: 0, corals: 0, fishes: 0 }
+const EMPTY_COUNTS: CountMap = {
+  reefs: 0,
+  sites: 0,
+  belts: 0,
+  samples: 0,
+  identifications: 0,
+  fishes: 0
+}
 
 const counts = ref<CountMap>(EMPTY_COUNTS)
 const lastBackupAt = ref<string | null>(null)
 const stampedVersion = ref<number>(DB_VERSION)
 const reefSummaries = ref<ReturnType<typeof buildReefSummaries>>([])
+const genusSummary = ref<ReturnType<typeof buildGenusSummary>>([])
 const overwriteOnImport = ref(true)
 const fileList = ref<UploadFile[]>([])
 const busy = ref(false)
@@ -67,7 +78,8 @@ const rows = computed(() => surveyStore.filteredCoverageRows)
 
 const totals = computed(() => ({
   belts: rows.value.length,
-  coralCount: rows.value.reduce((sum, row) => sum + row.coralCount, 0),
+  sampleCount: rows.value.reduce((sum, row) => sum + row.sampleCount, 0),
+  provisionalCount: rows.value.reduce((sum, row) => sum + row.provisionalCount, 0),
   coverCmTotal: rows.value.reduce((sum, row) => sum + row.coverCmTotal, 0),
   fishTotal: rows.value.reduce((sum, row) => sum + row.fishTotal, 0),
   avgCoveragePct:
@@ -115,7 +127,8 @@ async function refresh(): Promise<void> {
     orientation: row.orientation,
     surveyDate: row.surveyDate,
     observer: row.observer,
-    coralCount: row.coralCount,
+    sampleCount: row.sampleCount,
+    provisionalCount: row.provisionalCount,
     coverCmTotal: row.coverCmTotal,
     coveragePct: row.coveragePct,
     bleachIndex: row.bleachIndex,
@@ -127,6 +140,7 @@ async function refresh(): Promise<void> {
     fishDensity: row.fishDensity,
     conclusion: ''
   })))
+  genusSummary.value = buildGenusSummary(payload)
 }
 
 function handleFilterChange(): void {
@@ -214,15 +228,21 @@ async function handleDatabaseReset(): Promise<void> {
 }
 
 async function copySummary(): Promise<void> {
-  const text = rows.value
-    .map(
-      (row) =>
-        `${row.reefName}｜站位 ${row.siteNo}｜样带 ${row.beltNo}（${row.orientation}向 ${row.lengthM} m）：珊瑚覆盖率 ${row.coveragePct}%，白化指数 ${row.bleachIndex}（${row.grade}），白化占比 ${row.bleachedSharePct}%，鱼类 ${row.fishTotal} 尾（${row.fishDensity} 尾/100m²）`
+  const lines = rows.value.map(
+    (row) =>
+      `${row.reefName}｜站位 ${row.siteNo}｜样带 ${row.beltNo}（${row.orientation}向 ${row.lengthM} m）：珊瑚覆盖率 ${row.coveragePct}%，白化指数 ${row.bleachIndex}（${row.grade}），白化占比 ${row.bleachedSharePct}%，鱼类 ${row.fishTotal} 尾（${row.fishDensity} 尾/100m²）${row.provisionalCount > 0 ? `【含 ${row.provisionalCount} 管未鉴定按暂定属名计入】` : ''}`
+  )
+  const genusLines = [
+    '按归并属名（已鉴定按实验室属名，未鉴定/失败按外业暂定属名并标注）：',
+    ...genusSummary.value.map(
+      (item) =>
+        `${item.genus}：${item.coverCm} cm（${item.sharePct}%，${item.count} 管${item.provisionalCount > 0 ? `，其中暂定 ${item.provisionalCount} 管/${item.provisionalCoverCm} cm` : ''}）`
     )
-    .join('\n')
+  ]
+  const text = [...lines, '', ...genusLines].join('\n')
   try {
     await navigator.clipboard.writeText(text)
-    notice.value = '覆盖度结论已复制到剪贴板。'
+    notice.value = '覆盖度结论（含属名归并口径）已复制到剪贴板。'
     ElMessage.success(notice.value)
   } catch {
     notice.value = '当前浏览器不允许读取剪贴板，请手动选中表格内容复制。'
@@ -261,9 +281,18 @@ onMounted(() => {
 
     <el-alert v-if="notice" type="success" :closable="false" show-icon :title="notice" />
 
+    <el-alert
+      v-if="labStore.pendingCount + labStore.failedCount > 0 || labStore.orphanCount > 0"
+      type="warning"
+      show-icon
+      :closable="false"
+      :title="`归并口径：已鉴定 ${labStore.samples.length - labStore.pendingCount - labStore.failedCount} 管按实验室属名；待鉴定 ${labStore.pendingCount} 管、鉴定失败 ${labStore.failedCount} 管先按外业暂定属名计入并标注；对不上的孤立鉴定 ${labStore.orphanCount} 条等实验室补，不计入覆盖率。汇总与导出同一口径。`"
+    />
+
     <div class="gb-stats-row">
       <StatBadge label="样带数" :value="totals.belts" suffix="条" icon="Files" />
-      <StatBadge label="珊瑚记录" :value="totals.coralCount" suffix="条" tone="info" icon="Histogram" />
+      <StatBadge label="样本管" :value="totals.sampleCount" suffix="管" tone="info" icon="Histogram" />
+      <StatBadge label="暂定计入" :value="totals.provisionalCount" suffix="管" tone="warning" icon="Clock" />
       <StatBadge label="覆盖长度合计" :value="totals.coverCmTotal" suffix="cm" tone="success" icon="Odometer" />
       <StatBadge label="平均覆盖率" :value="totals.avgCoveragePct" suffix="%" :percent="Math.min(100, totals.avgCoveragePct)" icon="PieChart" />
       <StatBadge
@@ -322,6 +351,35 @@ onMounted(() => {
 
     <el-card shadow="never" class="gb-panel">
       <div class="gb-panel-title">
+        <h3>按归并属名的覆盖度（实验室鉴定口径）</h3>
+        <span class="gb-hint">已鉴定按实验室属名；待鉴定 / 失败按外业暂定属名计入，单列「暂定」管数与覆盖长度</span>
+      </div>
+      <el-table :data="genusSummary" border stripe class="gb-table-compact">
+        <el-table-column prop="genus" label="归并属名" min-width="160" />
+        <el-table-column label="覆盖长度" width="130" align="right">
+          <template #default="{ row }"><span class="gb-mono">{{ row.coverCm }} cm</span></template>
+        </el-table-column>
+        <el-table-column label="占比" width="140" align="right">
+          <template #default="{ row }">
+            <el-progress :percentage="row.sharePct" :stroke-width="10" :show-text="true" />
+          </template>
+        </el-table-column>
+        <el-table-column label="管数" width="90" align="right">
+          <template #default="{ row }"><span class="gb-mono">{{ row.count }}</span></template>
+        </el-table-column>
+        <el-table-column label="其中暂定计入" min-width="170" align="right">
+          <template #default="{ row }">
+            <el-tag v-if="row.provisionalCount > 0" size="small" type="warning" effect="plain">
+              {{ row.provisionalCount }} 管 · {{ row.provisionalCoverCm }} cm
+            </el-tag>
+            <span v-else class="gb-hint">全部已鉴定</span>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
+    <el-card shadow="never" class="gb-panel">
+      <div class="gb-panel-title">
         <h3>按样带的覆盖度成果（{{ rows.length }} 条）</h3>
         <span class="gb-hint">按白化指数降序排列</span>
       </div>
@@ -345,9 +403,10 @@ onMounted(() => {
             <span class="gb-mono">{{ row.lengthM }} m</span>
           </template>
         </el-table-column>
-        <el-table-column label="珊瑚记录" width="100" align="right">
+        <el-table-column label="样本管" width="120" align="right">
           <template #default="{ row }">
-            <span class="gb-mono">{{ row.coralCount }}</span>
+            <span class="gb-mono">{{ row.sampleCount }}</span>
+            <div v-if="row.provisionalCount > 0" class="gb-hint">暂定 {{ row.provisionalCount }}</div>
           </template>
         </el-table-column>
         <el-table-column label="覆盖率" width="130" align="right">
@@ -412,9 +471,10 @@ onMounted(() => {
             <span class="gb-mono">{{ row.siteCount }} / {{ row.beltCount }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="珊瑚记录" width="110" align="right">
+        <el-table-column label="样本管" width="130" align="right">
           <template #default="{ row }">
-            <span class="gb-mono">{{ row.coralCount }}</span>
+            <span class="gb-mono">{{ row.sampleCount }}</span>
+            <div v-if="row.provisionalCount > 0" class="gb-hint">暂定 {{ row.provisionalCount }}</div>
           </template>
         </el-table-column>
         <el-table-column label="覆盖长度" width="130" align="right">
@@ -440,7 +500,7 @@ onMounted(() => {
       <div class="gb-panel-title">
         <h3>结构版本与全量 JSON 导入导出</h3>
         <span class="gb-hint">
-          导出内容包含 reefs / sites / belts / corals / fishes 五张表 · 最近备份
+          导出内容包含 reefs / sites / belts / samples / identifications / fishes 六张表 · 最近备份
           {{ lastBackupAt ? new Date(lastBackupAt).toLocaleString('zh-CN') : '尚未备份' }}
         </span>
       </div>
@@ -477,8 +537,8 @@ onMounted(() => {
         <el-descriptions-item label="本地库名">{{ DB_NAME }}</el-descriptions-item>
         <el-descriptions-item label="结构版本">v{{ DB_VERSION }}（浏览器记录 v{{ stampedVersion }}）</el-descriptions-item>
         <el-descriptions-item label="礁区 / 站位">{{ counts.reefs }} / {{ counts.sites }}</el-descriptions-item>
-        <el-descriptions-item label="样带 / 珊瑚记录">{{ counts.belts }} / {{ counts.corals }}</el-descriptions-item>
-        <el-descriptions-item label="鱼类计数">{{ counts.fishes }}</el-descriptions-item>
+        <el-descriptions-item label="样带 / 样本管">{{ counts.belts }} / {{ counts.samples }}</el-descriptions-item>
+        <el-descriptions-item label="鉴定 / 鱼类计数">{{ counts.identifications }} / {{ counts.fishes }}</el-descriptions-item>
         <el-descriptions-item label="最近备份时间">
           {{ lastBackupAt ? new Date(lastBackupAt).toLocaleString('zh-CN') : '尚未备份' }}
         </el-descriptions-item>

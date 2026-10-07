@@ -267,7 +267,7 @@ onMounted(() => {
         </div>
         <div class="page__actions">
           <el-button :icon="DocumentCopy" @click="openPaste">批量粘贴</el-button>
-          <el-button @click="gotoCoral">← 珊瑚计数</el-button>
+          <el-button @click="gotoCoral">← 外业采样</el-button>
           <el-button type="primary" :icon="Plus" @click="openCreate">新增计数记录</el-button>
         </div>
       </div>

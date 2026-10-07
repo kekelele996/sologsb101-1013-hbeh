@@ -17,7 +17,7 @@ import BleachTag from '@/components/common/BleachTag.vue'
 import RouteMissingPanel from '@/components/common/RouteMissingPanel.vue'
 import { useReefStore } from '@/stores/reefStore'
 import { useBeltStore } from '@/stores/beltStore'
-import { useSurveyStore } from '@/stores/surveyStore'
+import { useLabStore } from '@/stores/labStore'
 import { formatLatLng, SUBSTRATES, validateLatLng } from '@/types/site'
 import type { Site } from '@/types/site'
 import { bleachGrade, bleachIndex } from '@/utils/bleach'
@@ -27,7 +27,7 @@ const route = useRoute()
 const router = useRouter()
 const reefStore = useReefStore()
 const beltStore = useBeltStore()
-const surveyStore = useSurveyStore()
+const labStore = useLabStore()
 
 const reefId = computed(() => String(route.params.id ?? ''))
 const reef = computed(() => reefStore.reefById(reefId.value))
@@ -43,7 +43,7 @@ const form = reactive({
   substrate: SUBSTRATES[0]
 })
 
-/** 站位行：汇总样带数、珊瑚记录数与平均白化指数 */
+/** 站位行：汇总样带数、样本管数与平均白化指数 */
 const rows = computed(() => {
   const sites = reefStore.sitesOfReef(reefId.value).filter((site) => {
     const keyword = reefStore.siteFilter.keyword.trim()
@@ -55,13 +55,13 @@ const rows = computed(() => {
   return sites.map((site) => {
     const belts = beltStore.beltsOfSite(site.id)
     const beltIds = new Set(belts.map((belt) => belt.id))
-    const corals = surveyStore.corals.filter((coral) => beltIds.has(coral.beltId))
-    const index = bleachIndex(corals)
+    const samples = labStore.resolvedSamples.filter((sample) => beltIds.has(sample.beltId))
+    const index = bleachIndex(samples)
     return {
       site,
       beltCount: belts.length,
       beltLengthM: belts.reduce((sum, belt) => sum + belt.lengthM, 0),
-      coralCount: corals.length,
+      sampleCount: samples.length,
       bleachIndex: index,
       grade: bleachGrade(index)
     }
@@ -298,9 +298,9 @@ onMounted(() => {
             </el-button>
           </template>
         </el-table-column>
-        <el-table-column label="珊瑚记录" width="110" align="right">
+        <el-table-column label="样本管" width="110" align="right">
           <template #default="{ row }">
-            <span class="gb-mono">{{ row.coralCount }}</span>
+            <span class="gb-mono">{{ row.sampleCount }}</span>
           </template>
         </el-table-column>
         <el-table-column label="平均白化" width="150">

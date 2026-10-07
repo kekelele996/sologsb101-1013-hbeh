@@ -152,21 +152,28 @@ export const useReefStore = defineStore('reef', () => {
     await db.reefs.update(id, { ...patch, updatedAt: Date.now() } as never)
   }
 
-  /** 删除礁区：级联删除其站位、样带、珊瑚记录与鱼类计数 */
+  /** 删除礁区：级联删除其站位、样带、样本管、鉴定与鱼类计数 */
   async function removeReef(id: string): Promise<void> {
-    await db.transaction('rw', [db.reefs, db.sites, db.belts, db.corals, db.fishes], async () => {
-      const siteIds = (await db.sites.where('reefId').equals(id).toArray()).map((row) => row.id)
-      if (siteIds.length > 0) {
-        const beltIds = (await db.belts.where('siteId').anyOf(siteIds).toArray()).map((row) => row.id)
-        if (beltIds.length > 0) {
-          await db.corals.where('beltId').anyOf(beltIds).delete()
-          await db.fishes.where('beltId').anyOf(beltIds).delete()
-          await db.belts.bulkDelete(beltIds)
+    await db.transaction(
+      'rw',
+      [db.reefs, db.sites, db.belts, db.samples, db.identifications, db.fishes],
+      async () => {
+        const siteIds = (await db.sites.where('reefId').equals(id).toArray()).map((row) => row.id)
+        if (siteIds.length > 0) {
+          const belts = await db.belts.where('siteId').anyOf(siteIds).toArray()
+          const beltIds = belts.map((row) => row.id)
+          if (beltIds.length > 0) {
+            const tubeNos = (await db.samples.where('beltId').anyOf(beltIds).toArray()).map((row) => row.tubeNo)
+            await db.fishes.where('beltId').anyOf(beltIds).delete()
+            await db.samples.where('beltId').anyOf(beltIds).delete()
+            if (tubeNos.length > 0) await db.identifications.where('tubeNo').anyOf(tubeNos).delete()
+            await db.belts.bulkDelete(beltIds)
+          }
+          await db.sites.bulkDelete(siteIds)
         }
-        await db.sites.bulkDelete(siteIds)
+        await db.reefs.delete(id)
       }
-      await db.reefs.delete(id)
-    })
+    )
     if (currentReefId.value === id) selectReef(null)
   }
 
@@ -183,17 +190,24 @@ export const useReefStore = defineStore('reef', () => {
     await db.sites.update(id, { ...patch, updatedAt: Date.now() } as never)
   }
 
-  /** 删除站位：级联删除其样带、珊瑚记录与鱼类计数 */
+  /** 删除站位：级联删除其样带、样本管、鉴定与鱼类计数 */
   async function removeSite(id: string): Promise<void> {
-    await db.transaction('rw', [db.sites, db.belts, db.corals, db.fishes], async () => {
-      const beltIds = (await db.belts.where('siteId').equals(id).toArray()).map((row) => row.id)
-      if (beltIds.length > 0) {
-        await db.corals.where('beltId').anyOf(beltIds).delete()
-        await db.fishes.where('beltId').anyOf(beltIds).delete()
-        await db.belts.bulkDelete(beltIds)
+    await db.transaction(
+      'rw',
+      [db.sites, db.belts, db.samples, db.identifications, db.fishes],
+      async () => {
+        const belts = await db.belts.where('siteId').equals(id).toArray()
+        const beltIds = belts.map((row) => row.id)
+        if (beltIds.length > 0) {
+          const tubeNos = (await db.samples.where('beltId').anyOf(beltIds).toArray()).map((row) => row.tubeNo)
+          await db.fishes.where('beltId').anyOf(beltIds).delete()
+          await db.samples.where('beltId').anyOf(beltIds).delete()
+          if (tubeNos.length > 0) await db.identifications.where('tubeNo').anyOf(tubeNos).delete()
+          await db.belts.bulkDelete(beltIds)
+        }
+        await db.sites.delete(id)
       }
-      await db.sites.delete(id)
-    })
+    )
     if (currentSiteId.value === id) selectSite(null)
   }
 
@@ -206,8 +220,8 @@ export const useReefStore = defineStore('reef', () => {
         result[site.id] = 0
         continue
       }
-      const corals = await db.corals.where('beltId').anyOf(beltIds).toArray()
-      result[site.id] = round(bleachIndex(corals), 2)
+      const samples = await db.samples.where('beltId').anyOf(beltIds).toArray()
+      result[site.id] = round(bleachIndex(samples), 2)
     }
     return result
   }

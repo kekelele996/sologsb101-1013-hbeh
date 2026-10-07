@@ -15,6 +15,7 @@ import RouteMissingPanel from '@/components/common/RouteMissingPanel.vue'
 import { useReefStore } from '@/stores/reefStore'
 import { ORIENTATION_ORDER, useBeltStore } from '@/stores/beltStore'
 import { useSurveyStore } from '@/stores/surveyStore'
+import { useLabStore } from '@/stores/labStore'
 import { BELT_LENGTH_PRESETS, ORIENTATIONS } from '@/types/belt'
 import type { Belt, Orientation } from '@/types/belt'
 import { bleachGrade, bleachIndex, coralCoveragePct, fishDensity } from '@/utils/bleach'
@@ -25,6 +26,7 @@ const router = useRouter()
 const reefStore = useReefStore()
 const beltStore = useBeltStore()
 const surveyStore = useSurveyStore()
+const labStore = useLabStore()
 
 const siteId = computed(() => String(route.params.id ?? ''))
 const site = computed(() => reefStore.siteById(siteId.value))
@@ -41,17 +43,18 @@ const form = reactive({
   observer: ''
 })
 
-/** 样带行：回显珊瑚记录数、鱼类记录数、覆盖率与白化指数 */
+/** 样带行：回显样本管数、鱼类记录数、覆盖率与白化指数（有效属名口径） */
 const rows = computed(() =>
   beltStore.beltsOfSite(siteId.value).map((belt) => {
-    const corals = surveyStore.coralsOfBelt(belt.id)
+    const samples = labStore.resolvedOfBelt(belt.id)
     const fishes = surveyStore.fishesOfBelt(belt.id)
-    const coverCmTotal = corals.reduce((sum, coral) => sum + coral.coverCm, 0)
-    const index = bleachIndex(corals)
+    const coverCmTotal = samples.reduce((sum, sample) => sum + sample.coverCm, 0)
+    const index = bleachIndex(samples)
     const fishTotal = fishes.filter((fish) => fish.category === '鱼类').reduce((sum, fish) => sum + fish.count, 0)
     return {
       belt,
-      coralCount: corals.length,
+      sampleCount: samples.length,
+      provisionalCount: samples.filter((sample) => sample.provisional).length,
       fishCount: fishes.length,
       coverCmTotal,
       coveragePct: coralCoveragePct(coverCmTotal, belt.lengthM),
@@ -67,12 +70,12 @@ const conflicts = computed(() => beltStore.findBeltConflicts(siteId.value))
 const stats = computed(() => {
   const belts = beltStore.beltsOfSite(siteId.value)
   const totalLength = belts.reduce((sum, belt) => sum + belt.lengthM, 0)
-  const coralCount = belts.reduce((sum, belt) => sum + surveyStore.coralsOfBelt(belt.id).length, 0)
+  const sampleCount = belts.reduce((sum, belt) => sum + labStore.resolvedOfBelt(belt.id).length, 0)
   const fishCount = belts.reduce((sum, belt) => sum + surveyStore.fishesOfBelt(belt.id).length, 0)
   return {
     beltCount: belts.length,
     totalLength,
-    coralCount,
+    sampleCount,
     fishCount,
     orientationCount: new Set(belts.map((belt) => belt.orientation)).size
   }
@@ -152,10 +155,10 @@ async function submitForm(): Promise<void> {
 }
 
 async function removeBelt(belt: Belt): Promise<void> {
-  const counts = surveyStore.beltRecordCounts[belt.id] ?? { coralCount: 0, fishCount: 0 }
+  const counts = surveyStore.beltRecordCounts[belt.id] ?? { sampleCount: 0, fishCount: 0 }
   try {
     await ElMessageBox.confirm(
-      `删除样带「${belt.no}」将同时删除其 ${counts.coralCount} 条珊瑚记录与 ${counts.fishCount} 条计数记录，确认删除？`,
+      `删除样带「${belt.no}」将同时删除其 ${counts.sampleCount} 个样本管、鉴定记录与 ${counts.fishCount} 条计数记录，确认删除？`,
       '删除确认',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
     )
@@ -163,7 +166,7 @@ async function removeBelt(belt: Belt): Promise<void> {
     return
   }
   await beltStore.removeBelt(belt.id)
-  ElMessage.success('样带及其记录已删除')
+  ElMessage.success('样带及其样本与计数已删除')
 }
 
 async function applyOrientationOrder(): Promise<void> {
@@ -243,7 +246,7 @@ onMounted(() => {
       <div class="gb-stats-row">
         <StatBadge label="样带条数" :value="stats.beltCount" suffix="条" icon="Files" />
         <StatBadge label="累计长度" :value="stats.totalLength" suffix="m" tone="info" icon="Odometer" />
-        <StatBadge label="珊瑚记录" :value="stats.coralCount" suffix="条" tone="success" icon="Histogram" />
+        <StatBadge label="样本管" :value="stats.sampleCount" suffix="管" tone="success" icon="Histogram" />
         <StatBadge label="计数记录" :value="stats.fishCount" suffix="条" tone="warning" icon="DataLine" />
       </div>
 
@@ -281,11 +284,12 @@ onMounted(() => {
           </template>
         </el-table-column>
         <el-table-column prop="belt.observer" label="调查人" width="110" />
-        <el-table-column label="珊瑚记录" width="120" align="center">
+        <el-table-column label="样本管" width="120" align="center">
           <template #default="{ row }">
             <el-button text type="primary" size="small" @click="gotoCorals(row.belt)">
-              {{ row.coralCount }} 条
+              {{ row.sampleCount }} 管
             </el-button>
+            <div v-if="row.provisionalCount > 0" class="gb-hint">暂定 {{ row.provisionalCount }}</div>
           </template>
         </el-table-column>
         <el-table-column label="鱼类计数" width="120" align="center">

@@ -5,10 +5,11 @@
  */
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { DataLine, Files, Grid, Odometer, PieChart } from '@element-plus/icons-vue'
+import { DataLine, Files, Grid, MagicStick, Odometer, PieChart } from '@element-plus/icons-vue'
 import { useReefStore } from '@/stores/reefStore'
 import { useBeltStore } from '@/stores/beltStore'
 import { useSurveyStore } from '@/stores/surveyStore'
+import { useLabStore } from '@/stores/labStore'
 import { DB_NAME, DB_VERSION } from '@/utils/db'
 
 const route = useRoute()
@@ -16,24 +17,28 @@ const router = useRouter()
 const reefStore = useReefStore()
 const beltStore = useBeltStore()
 const surveyStore = useSurveyStore()
+const labStore = useLabStore()
 
 onMounted(() => {
   reefStore.start()
   beltStore.start()
   surveyStore.start()
+  labStore.start()
 })
 
 /** 层级路由统一归属到最上层导航项 */
 const activeKey = computed(() => {
   if (route.path.startsWith('/reefs/')) return '/reefs'
   if (route.path.startsWith('/sites/')) return '/reefs'
+  if (route.path === '/lab') return '/lab'
   if (route.path.startsWith('/belts/')) return '/coverage'
   return route.path
 })
 
 const navItems = computed(() => [
   { key: '/reefs', label: '礁区台账', icon: Odometer, badge: String(reefStore.reefs.length) },
-  { key: '/coverage', label: '覆盖度汇总', icon: PieChart, badge: String(surveyStore.corals.length) }
+  { key: '/lab', label: '实验室鉴定', icon: MagicStick, badge: labStore.attentionCount > 0 ? String(labStore.attentionCount) : '' },
+  { key: '/coverage', label: '覆盖度汇总', icon: PieChart, badge: String(labStore.samples.length) }
 ])
 
 /** 当前上下文的快捷入口：礁区 → 站位 → 样带 → 珊瑚/鱼类 */
@@ -51,8 +56,9 @@ const contextLinks = computed(() => {
   if (route.path.startsWith('/belts/') && id) {
     const belt = beltStore.beltById(id)
     if (belt) links.push({ label: '所属站位样带', path: `/sites/${belt.siteId}/belts` })
-    links.push({ label: '珊瑚计数', path: `/belts/${id}/corals` })
+    links.push({ label: '外业采样', path: `/belts/${id}/corals` })
     links.push({ label: '鱼类计数', path: `/belts/${id}/fishes` })
+    links.push({ label: '实验室鉴定', path: `/lab?belt=${id}` })
   }
   if (route.path.startsWith('/coverage')) links.push({ label: '礁区台账', path: '/reefs' })
   return links
@@ -70,7 +76,7 @@ function go(path: string): void {
         <span class="app-header__mark">珊</span>
         <div>
           <h1 class="app-header__title">珊瑚礁样带普查与白化分级台</h1>
-          <p class="app-header__sub">礁区 · 站位 · 样带 · 珊瑚分类覆盖 · 白化分级 · 鱼类计数</p>
+          <p class="app-header__sub">礁区 · 站位 · 样带 · 外业采样管 · 实验室鉴定 · 白化分级 · 鱼类计数</p>
         </div>
       </div>
       <nav class="app-nav">
@@ -84,7 +90,7 @@ function go(path: string): void {
         >
           <el-icon><component :is="item.icon" /></el-icon>
           <span>{{ item.label }}</span>
-          <em v-if="item.badge" class="app-nav__badge">{{ item.badge }}</em>
+          <em v-if="item.badge && Number(item.badge) > 0" class="app-nav__badge">{{ item.badge }}</em>
         </button>
       </nav>
     </header>
@@ -107,8 +113,9 @@ function go(path: string): void {
         本地库 {{ DB_NAME }} · 结构版本 v{{ DB_VERSION }} · 数据仅存于本浏览器 IndexedDB，不上传任何服务器。
       </span>
       <span>
-        礁区 {{ reefStore.reefs.length }} · 站位 {{ reefStore.sites.length }} · 样带 {{ beltStore.belts.length }} · 珊瑚记录
-        {{ surveyStore.corals.length }} · 计数记录 {{ surveyStore.fishes.length }}
+        礁区 {{ reefStore.reefs.length }} · 站位 {{ reefStore.sites.length }} · 样带 {{ beltStore.belts.length }} · 样本管
+        {{ labStore.samples.length }} · 鉴定记录 {{ labStore.identifications.length }} · 计数记录
+        {{ surveyStore.fishes.length }}
       </span>
     </footer>
   </div>
